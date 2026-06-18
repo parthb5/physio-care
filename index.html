@@ -193,7 +193,7 @@
         </div>
         <div>
           <div class="header-title"><span>Vanshika's</span> Physio Care</div>
-          <div class="header-sub">Home Visit Tracker</div>
+          <div class="header-sub">Home Visit Tracker &nbsp;·&nbsp; <span id="header-version" style="color:var(--pink);font-weight:700;"></span></div>
         </div>
       </div>
       <button class="header-add" onclick="openAddPatient()" aria-label="Add patient">
@@ -300,6 +300,10 @@
    push any update to GitHub
    ══════════════════════════════════ */
 const APP_VERSION = 'v1.0.0';
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('header-version');
+  if(el) el.textContent = APP_VERSION;
+});
 
 /* ── DATA ── */
 const STORE_KEY = 'vpc_v1';
