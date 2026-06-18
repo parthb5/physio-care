@@ -2,7 +2,7 @@
    Bump APP_VERSION any time you push an update.
    The next time the app is opened, it will auto-refresh to the new version. */
 
-const APP_VERSION = 'v1.0.0';
+const APP_VERSION = 'v1.2.0';
 const CACHE_NAME  = 'physio-care-' + APP_VERSION;
 const FILES = ['/', '/index.html', '/manifest.json'];
 
