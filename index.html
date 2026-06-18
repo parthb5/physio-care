@@ -105,6 +105,17 @@
   .act-pay:active{background:var(--pink-light);}
   .act-remind-on{color:#92620a;background:#fff8e1;border-color:#f0c040;}
   .act-edit{color:var(--muted);}
+  .export-row{display:flex;gap:8px;margin-top:8px;}
+  .exp-btn{flex:1;padding:10px 4px;border:0.5px solid var(--border);border-radius:13px;background:var(--card);font-size:11px;font-weight:700;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;color:#555;transition:background .15s,transform .1s;}
+  .exp-btn i{font-size:20px;}
+  .exp-btn:active{transform:scale(0.96);background:#f5f5f5;}
+  .exp-btn.exp-pdf{color:#c0392b;border-color:#f5c0b0;}
+  .exp-btn.exp-csv{color:#1a7a40;border-color:#9FE1CB;}
+  .exp-all-row{display:flex;gap:8px;margin-bottom:14px;}
+  .exp-all-btn{flex:1;padding:11px;border:0.5px solid var(--border);border-radius:13px;background:var(--card);font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:background .15s,transform .1s;}
+  .exp-all-btn:active{transform:scale(0.98);}
+  .exp-all-btn.pdf{color:#c0392b;border-color:#f5c0b0;}
+  .exp-all-btn.csv{color:#1a7a40;border-color:#9FE1CB;}
   .sec-label{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.6px;text-transform:uppercase;margin:14px 0 7px 2px;}
   .log-card{background:var(--card);border-radius:14px;border:0.5px solid var(--border);overflow:hidden;margin-bottom:4px;}
   .log-item{display:flex;justify-content:space-between;align-items:center;padding:11px 14px;border-bottom:0.5px solid #f3f3f3;}
@@ -216,6 +227,10 @@
 
   <div id="screen-patients" class="screen active">
     <div id="strip"></div>
+    <div class="exp-all-row">
+      <button class="exp-all-btn pdf" onclick="exportAllPDF()"><i class="ti ti-file-type-pdf" style="font-size:16px"></i> All Patients PDF</button>
+      <button class="exp-all-btn csv" onclick="exportAllCSV()"><i class="ti ti-file-type-csv" style="font-size:16px"></i> All Patients CSV</button>
+    </div>
     <div class="search-wrap">
       <i class="ti ti-search"></i>
       <input type="text" id="psearch" placeholder="Search patient…" oninput="renderPatients()">
@@ -299,7 +314,7 @@
    APP VERSION — bump this when you
    push any update to GitHub
    ══════════════════════════════════ */
-const APP_VERSION = 'v1.0.0';
+const APP_VERSION = 'v1.2.0';
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('header-version');
   if(el) el.textContent = APP_VERSION;
@@ -433,9 +448,31 @@ function openAddPatient(){
 }
 function savePatient(){
   const name=document.getElementById('p-name').value.trim();
-  if(!name){alert('Please enter the patient\'s name.');return;}
-  const d=gd();const id=document.getElementById('p-id').value;
-  const obj={name,phone:document.getElementById('p-phone').value.trim(),address:document.getElementById('p-address').value.trim(),defaultCharge:document.getElementById('p-charge').value};
+  const phone=document.getElementById('p-phone').value.trim();
+  if(!name){alert("Please enter the patient's name.");return;}
+  const d=gd();
+  const id=document.getElementById('p-id').value;
+
+  // Normalize phone for comparison — strip spaces, dashes, brackets
+  const normPhone=n=>n.replace(/[\s\-\(\)]/g,'');
+
+  // Duplicate phone check (only if phone entered)
+  if(phone){
+    const dupPhone=d.patients.find(p=>p.id!==id && p.phone && normPhone(p.phone)===normPhone(phone));
+    if(dupPhone){
+      alert('Phone already registered!\n\nThis number belongs to:\n"' + dupPhone.name + '"\n\nPlease check before adding a duplicate.');
+      return;
+    }
+  }
+
+  // Duplicate name check (case-insensitive, warn but allow)
+  const dupName=d.patients.find(p=>p.id!==id && p.name.toLowerCase()===name.toLowerCase());
+  if(dupName){
+    const go=confirm('A patient named "' + dupName.name + '" already exists.\n\nAre you sure you want to add another with the same name?');
+    if(!go) return;
+  }
+
+  const obj={name,phone,address:document.getElementById('p-address').value.trim(),defaultCharge:document.getElementById('p-charge').value};
   if(id){const idx=d.patients.findIndex(p=>p.id===id);d.patients[idx]={...d.patients[idx],...obj};}
   else d.patients.push({id:uid(),...obj,remind:false,createdAt:new Date().toISOString()});
   sd(d);closeModal('m-patient');renderPatients();
@@ -517,6 +554,10 @@ function openDetail(pid,stay){
         <button class="act-btn ${p.remind?'act-remind-on':''}" onclick="toggleRemind('${pid}')"><i class="ti ti-bell"></i>${p.remind?'Reminded':'Remind'}</button>
         <button class="act-btn act-edit" onclick="editPatient('${pid}')"><i class="ti ti-edit"></i>Edit</button>
       </div>
+      <div class="export-row">
+        <button class="exp-btn exp-pdf" onclick="exportPatientPDF('${pid}')"><i class="ti ti-file-type-pdf"></i>PDF Report</button>
+        <button class="exp-btn exp-csv" onclick="exportPatientCSV('${pid}')"><i class="ti ti-file-type-csv"></i>CSV Export</button>
+      </div>
     </div>
     <div class="sec-label">Visit history</div>
     <div class="log-card">
@@ -593,6 +634,238 @@ function switchTab(tab){
   if(tab==='patients')renderPatients();
   if(tab==='visits')renderAllVisits();
   if(tab==='reminders')renderReminders();
+}
+
+
+/* ══ EXPORT HELPERS ══ */
+
+function fmtDateFull(d){
+  if(!d) return '';
+  return new Date(d+'T00:00:00').toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'});
+}
+
+function triggerDownload(filename, content, mime){
+  const blob = new Blob([content], {type: mime});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 500);
+}
+
+/* ── SINGLE PATIENT PDF ── */
+function exportPatientPDF(pid){
+  const d=gd();
+  const p=d.patients.find(x=>x.id===pid); if(!p) return;
+  const visits=d.visits.filter(v=>v.pid===pid).sort((a,b)=>a.date.localeCompare(b.date));
+  const pays=d.payments.filter(x=>x.pid===pid).sort((a,b)=>a.date.localeCompare(b.date));
+  const totalCharged=visits.reduce((a,v)=>a+Number(v.charge),0);
+  const totalPaid=pays.reduce((a,v)=>a+Number(v.amount),0);
+  const balance=totalPaid-totalCharged;
+  const balLabel=balance<0?'Outstanding: '+fmtAmt(balance):balance>0?'Credit Balance: '+fmtAmt(balance):'Fully Settled';
+  const balColor=balance<0?'#c0392b':balance>0?'#1D9E75':'#555';
+  const today=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
+
+  const visitRows=visits.length
+    ? visits.map((v,i)=>`<tr style="background:${i%2===0?'#fff':'#fafafa'}">
+        <td>${fmtDateFull(v.date)}</td>
+        <td>${v.time||'—'}</td>
+        <td>${v.notes||'—'}</td>
+        <td style="text-align:right;color:#c0392b;font-weight:600">₹${Number(v.charge).toLocaleString('en-IN')}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="4" style="text-align:center;color:#999;padding:16px">No visits recorded</td></tr>';
+
+  const payRows=pays.length
+    ? pays.map((pm,i)=>`<tr style="background:${i%2===0?'#fff':'#fafafa'}">
+        <td>${fmtDateFull(pm.date)}</td>
+        <td>${pm.note||'—'}</td>
+        <td style="text-align:right;color:#1D9E75;font-weight:600">₹${Number(pm.amount).toLocaleString('en-IN')}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="3" style="text-align:center;color:#999;padding:16px">No payments recorded</td></tr>';
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>Patient Report — ${p.name}</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;padding:24px;color:#1a1a1a;font-size:13px;}
+    .header{background:#D4537E;color:#fff;padding:20px 24px;border-radius:10px;margin-bottom:20px;}
+    .header h1{margin:0;font-size:20px;font-weight:800;}
+    .header p{margin:4px 0 0;font-size:12px;opacity:.85;}
+    .info-grid{display:flex;gap:16px;margin-bottom:20px;flex-wrap:wrap;}
+    .info-box{flex:1;min-width:140px;background:#f7f7f8;border-radius:8px;padding:12px 14px;border:0.5px solid #e8e8e8;}
+    .info-box label{font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.5px;}
+    .info-box p{margin:4px 0 0;font-size:14px;font-weight:700;color:#1a1a1a;}
+    .balance-box{background:#f7f7f8;border-radius:8px;padding:14px;margin-bottom:20px;text-align:center;border:2px solid ${balColor}22;}
+    .balance-box .bal{font-size:24px;font-weight:900;color:${balColor};}
+    .balance-box .lbl{font-size:11px;color:#999;margin-top:2px;}
+    h2{font-size:13px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.5px;margin:20px 0 8px;border-bottom:1px solid #e8e8e8;padding-bottom:6px;}
+    table{width:100%;border-collapse:collapse;margin-bottom:8px;}
+    th{background:#f0f0f0;padding:8px 10px;text-align:left;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.4px;}
+    td{padding:8px 10px;border-bottom:0.5px solid #f0f0f0;font-size:12px;}
+    .totals{display:flex;gap:12px;margin-top:16px;}
+    .total-box{flex:1;background:#f7f7f8;border-radius:8px;padding:12px;text-align:center;}
+    .total-box .val{font-size:16px;font-weight:800;}
+    .total-box .lbl{font-size:10px;color:#999;margin-top:2px;}
+    .footer{margin-top:24px;text-align:center;font-size:10px;color:#bbb;border-top:0.5px solid #e8e8e8;padding-top:12px;}
+    @media print{body{padding:0;} .header{border-radius:0;}}
+  </style></head><body>
+  <div class="header">
+    <h1>Vanshika's Physio Care</h1>
+    <p>Patient Report &nbsp;·&nbsp; Generated on ${today}</p>
+  </div>
+  <div class="info-grid">
+    <div class="info-box"><label>Patient Name</label><p>${p.name}</p></div>
+    <div class="info-box"><label>Phone</label><p>${p.phone||'—'}</p></div>
+    <div class="info-box"><label>Address</label><p>${p.address||'—'}</p></div>
+    <div class="info-box"><label>Default Charge</label><p>${p.defaultCharge?'₹'+p.defaultCharge+' / visit':'—'}</p></div>
+  </div>
+  <div class="balance-box">
+    <div class="bal">${balLabel}</div>
+    <div class="lbl">Total Charged: ₹${totalCharged.toLocaleString('en-IN')} &nbsp;·&nbsp; Total Paid: ₹${totalPaid.toLocaleString('en-IN')}</div>
+  </div>
+  <h2>Visit History (${visits.length} visits)</h2>
+  <table><thead><tr><th>Date</th><th>Time</th><th>Notes / Treatment</th><th style="text-align:right">Charge</th></tr></thead>
+  <tbody>${visitRows}</tbody>
+  <tfoot><tr><td colspan="3" style="text-align:right;font-weight:700;padding:10px;">Total Charged</td><td style="text-align:right;font-weight:800;color:#c0392b;padding:10px;">₹${totalCharged.toLocaleString('en-IN')}</td></tr></tfoot>
+  </table>
+  <h2>Payment History (${pays.length} payments)</h2>
+  <table><thead><tr><th>Date</th><th>Mode / Note</th><th style="text-align:right">Amount</th></tr></thead>
+  <tbody>${payRows}</tbody>
+  <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700;padding:10px;">Total Paid</td><td style="text-align:right;font-weight:800;color:#1D9E75;padding:10px;">₹${totalPaid.toLocaleString('en-IN')}</td></tr></tfoot>
+  </table>
+  <div class="footer">Vanshika's Physio Care &nbsp;·&nbsp; Home Visit Tracker &nbsp;·&nbsp; ${today}</div>
+  <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w=window.open('','_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ── SINGLE PATIENT CSV ── */
+function exportPatientCSV(pid){
+  const d=gd();
+  const p=d.patients.find(x=>x.id===pid); if(!p) return;
+  const visits=d.visits.filter(v=>v.pid===pid).sort((a,b)=>a.date.localeCompare(b.date));
+  const pays=d.payments.filter(x=>x.pid===pid).sort((a,b)=>a.date.localeCompare(b.date));
+  const totalCharged=visits.reduce((a,v)=>a+Number(v.charge),0);
+  const totalPaid=pays.reduce((a,v)=>a+Number(v.amount),0);
+  const balance=totalPaid-totalCharged;
+
+  let csv='PATIENT DETAILS\n';
+  csv+=`Name,${p.name}\nPhone,${p.phone||''}\nAddress,${p.address||''}\nDefault Charge,${p.defaultCharge||''}\n\n`;
+  csv+=`BALANCE SUMMARY\nTotal Charged,${totalCharged}\nTotal Paid,${totalPaid}\nBalance,${balance}\nStatus,${balance<0?'Outstanding':balance>0?'Credit':'Settled'}\n\n`;
+  csv+='VISIT HISTORY\nDate,Time,Notes,Charge (INR)\n';
+  visits.forEach(v=>{ csv+=`${v.date},${v.time||''},"${(v.notes||'').replace(/"/g,"''")}",${v.charge}\n`; });
+  csv+=`,,Total Charged,${totalCharged}\n\n`;
+  csv+='PAYMENT HISTORY\nDate,Mode/Note,Amount (INR)\n';
+  pays.forEach(pm=>{ csv+=`${pm.date},"${(pm.note||'').replace(/"/g,"''")}",${pm.amount}\n`; });
+  csv+=`,Total Paid,${totalPaid}\n`;
+
+  triggerDownload(`${p.name.replace(/\s+/g,'_')}_report.csv`, csv, 'text/csv;charset=utf-8;');
+}
+
+/* ── ALL PATIENTS PDF ── */
+function exportAllPDF(){
+  const d=gd();
+  if(!d.patients.length){alert('No patients to export.');return;}
+  const today=new Date().toLocaleDateString('en-IN',{day:'2-digit',month:'long',year:'numeric'});
+
+  const rows=d.patients.map((p,i)=>{
+    const visits=d.visits.filter(v=>v.pid===p.id);
+    const pays=d.payments.filter(x=>x.pid===p.id);
+    const charged=visits.reduce((a,v)=>a+Number(v.charge),0);
+    const paid=pays.reduce((a,v)=>a+Number(v.amount),0);
+    const b=paid-charged;
+    const bColor=b<0?'#c0392b':b>0?'#1D9E75':'#555';
+    const bTxt=b<0?'₹'+Math.abs(b).toLocaleString('en-IN')+' Due':b>0?'₹'+b.toLocaleString('en-IN')+' Credit':'Settled';
+    return `<tr style="background:${i%2===0?'#fff':'#fafafa'}">
+      <td style="font-weight:600">${p.name}</td>
+      <td>${p.phone||'—'}</td>
+      <td>${p.address||'—'}</td>
+      <td style="text-align:center">${visits.length}</td>
+      <td style="text-align:right;color:#c0392b;font-weight:600">₹${charged.toLocaleString('en-IN')}</td>
+      <td style="text-align:right;color:#1D9E75;font-weight:600">₹${paid.toLocaleString('en-IN')}</td>
+      <td style="text-align:right;font-weight:700;color:${bColor}">${bTxt}</td>
+    </tr>`;
+  }).join('');
+
+  const totalOut=d.patients.reduce((a,p)=>{const b=bal(p.id);return b<0?a+Math.abs(b):a;},0);
+  const totalCr=d.patients.reduce((a,p)=>{const b=bal(p.id);return b>0?a+b:a;},0);
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <title>All Patients Report</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;padding:24px;color:#1a1a1a;font-size:12px;}
+    .header{background:#D4537E;color:#fff;padding:20px 24px;border-radius:10px;margin-bottom:20px;}
+    .header h1{margin:0;font-size:20px;font-weight:800;}
+    .header p{margin:4px 0 0;font-size:12px;opacity:.85;}
+    .summary{display:flex;gap:12px;margin-bottom:20px;}
+    .sum-box{flex:1;background:#f7f7f8;border-radius:8px;padding:12px;text-align:center;border:0.5px solid #e8e8e8;}
+    .sum-box .val{font-size:18px;font-weight:800;}
+    .sum-box .lbl{font-size:10px;color:#999;margin-top:2px;}
+    table{width:100%;border-collapse:collapse;}
+    th{background:#1a1a1a;color:#fff;padding:9px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;}
+    td{padding:9px 10px;border-bottom:0.5px solid #f0f0f0;font-size:11px;}
+    .footer{margin-top:24px;text-align:center;font-size:10px;color:#bbb;border-top:0.5px solid #e8e8e8;padding-top:12px;}
+    @media print{body{padding:0;} .header{border-radius:0;}}
+  </style></head><body>
+  <div class="header">
+    <h1>Vanshika's Physio Care</h1>
+    <p>All Patients Summary &nbsp;·&nbsp; Generated on ${today}</p>
+  </div>
+  <div class="summary">
+    <div class="sum-box"><div class="val">${d.patients.length}</div><div class="lbl">Total Patients</div></div>
+    <div class="sum-box"><div class="val" style="color:#c0392b">₹${totalOut.toLocaleString('en-IN')}</div><div class="lbl">Total Outstanding</div></div>
+    <div class="sum-box"><div class="val" style="color:#1D9E75">₹${totalCr.toLocaleString('en-IN')}</div><div class="lbl">Total Credit</div></div>
+  </div>
+  <table><thead><tr>
+    <th>Name</th><th>Phone</th><th>Address</th><th style="text-align:center">Visits</th>
+    <th style="text-align:right">Charged</th><th style="text-align:right">Paid</th><th style="text-align:right">Balance</th>
+  </tr></thead><tbody>${rows}</tbody></table>
+  <div class="footer">Vanshika's Physio Care &nbsp;·&nbsp; Home Visit Tracker &nbsp;·&nbsp; ${today}</div>
+  <script>window.onload=()=>window.print();<\/script>
+  </body></html>`;
+
+  const w=window.open('','_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ── ALL PATIENTS CSV ── */
+function exportAllCSV(){
+  const d=gd();
+  if(!d.patients.length){alert('No patients to export.');return;}
+  const today=new Date().toISOString().slice(0,10);
+
+  let csv='VANSHIKA\'S PHYSIO CARE — ALL PATIENTS EXPORT\n';
+  csv+=`Generated on,${today}\n\n`;
+  csv+='Name,Phone,Address,Default Charge,Total Visits,Total Charged (INR),Total Paid (INR),Balance (INR),Status\n';
+
+  d.patients.forEach(p=>{
+    const visits=d.visits.filter(v=>v.pid===p.id);
+    const pays=d.payments.filter(x=>x.pid===p.id);
+    const charged=visits.reduce((a,v)=>a+Number(v.charge),0);
+    const paid=pays.reduce((a,v)=>a+Number(v.amount),0);
+    const b=paid-charged;
+    const status=b<0?'Outstanding':b>0?'Credit':'Settled';
+    csv+=`"${p.name}",${p.phone||''},"${p.address||''}",${p.defaultCharge||''},${visits.length},${charged},${paid},${b},${status}\n`;
+  });
+
+  // Also append all transactions
+  csv+='\n\nALL TRANSACTIONS\nPatient,Type,Date,Time,Notes,Amount (INR)\n';
+  const allTx=[
+    ...d.visits.map(v=>({pid:v.pid,type:'Visit',date:v.date,time:v.time||'',notes:v.notes||'',amount:v.charge})),
+    ...d.payments.map(p=>({pid:p.pid,type:'Payment',date:p.date,time:'',notes:p.note||'',amount:p.amount}))
+  ].sort((a,b)=>a.date.localeCompare(b.date));
+
+  allTx.forEach(tx=>{
+    const p=d.patients.find(x=>x.id===tx.pid);
+    csv+=`"${p?p.name:'Unknown'}",${tx.type},${tx.date},${tx.time},"${tx.notes.replace(/"/g,"''")}",${tx.amount}\n`;
+  });
+
+  triggerDownload(`VanshikaPhysioCare_AllPatients_${today}.csv`, csv, 'text/csv;charset=utf-8;');
 }
 
 /* ── INIT ── */
